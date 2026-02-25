@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASDE-X</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+@font-face { font-family: 'ERAM'; src: url('ERAMv110.ttf') format('truetype'); }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #393939; overflow: hidden; height: 100vh; }
+#map { width: 100%; height: 100vh; background: #393939; transform-origin: center center; }
+
+/* ── Status bar ── */
+#statusbar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 600;
+    background: #111; border-top: 1px solid #333;
+    display: flex; align-items: center; gap: 16px; padding: 4px 12px;
+    font-family: 'ERAM', 'Consolas', monospace; font-size: 10px; color: #888;
+}
+#statusbar a { color: #444; text-decoration: none; }
+#statusbar a:hover { color: #888; }
+#statusbar .airport-id { color: #cccc44; font-size: 13px; letter-spacing: 2px; }
+#conn { color: #ff4444; }
+#conn.ok { color: #44aa44; }
+#conn.waiting { color: #aaaa44; }
+#statusbar label { color: #666; margin-right: -10px; }
+#statusbar input[type=number] {
+    width: 40px; background: #222; border: 1px solid #444; color: #ccc;
+    font-family: inherit; font-size: 10px; text-align: center; padding: 1px 2px;
+}
+#statusbar button {
+    background: #222; border: 1px solid #444; color: #ccc;
+    font-family: inherit; font-size: 10px; padding: 1px 6px; cursor: pointer;
+}
+#statusbar button:hover { border-color: #888; }
+
+/* ── Target icons — rendered as Leaflet divIcons ── */
+.ac-icon {
+    position: relative;
+    overflow: visible;
+    pointer-events: none;
+}
+.ac-icon svg.sym {
+    display: block;
+    overflow: visible;
+    pointer-events: auto;
+    cursor: none;
+}
+.ac-icon svg.sym .halo { opacity: 0; }
+.ac-icon svg.sym:hover .halo { opacity: 1; }
+.ac-icon .ldr {
+    position: absolute; left: 0; top: 0;
+    overflow: visible; pointer-events: none;
+}
+.ac-icon .db-wrap {
+    position: absolute;
+    pointer-events: none;
+}
+.db {
+    font-family: 'ERAM', 'Consolas', monospace;
+    font-size: 13px; line-height: 16px;
+    color: #00cc00;
+    white-space: nowrap;
+    padding: 0 2px;
+    pointer-events: auto;
+    cursor: none;
+}
+.db-line2 { color: #00cc00; }
+.db-extra { color: #00cc00; }
+
+/* ── Gate codes config popup ── */
+#gatecode-popup {
+    display: none; position: fixed; z-index: 10000;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: #1a1a1a; border: 1px solid #cccc44; padding: 12px 16px;
+    font-family: 'ERAM', 'Consolas', monospace; font-size: 11px;
+    color: #ccc; min-width: 340px; max-height: 80vh; overflow-y: auto;
+}
+#gatecode-popup h3 { color: #cccc44; margin: 0 0 8px 0; font-size: 12px; }
+#gatecode-popup table { width: 100%; border-collapse: collapse; }
+#gatecode-popup th { color: #888; text-align: left; padding: 2px 4px; border-bottom: 1px solid #333; }
+#gatecode-popup td { padding: 2px 4px; }
+#gatecode-popup input {
+    background: #111; border: 1px solid #444; color: #ccc;
+    font-family: inherit; font-size: 11px; width: 100%; padding: 2px 4px;
+    outline: none; text-transform: uppercase;
+}
+#gatecode-popup input:focus { border-color: #cccc44; }
+#gatecode-popup .gc-del { color: #ff4444; cursor: pointer; padding: 0 4px; }
+#gatecode-popup .gc-btn {
+    background: #222; border: 1px solid #555; color: #cccc44;
+    font-family: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer; margin: 4px 4px 0 0;
+}
+#gatecode-popup .gc-btn:hover { border-color: #cccc44; }
+#gc-import-area {
+    width: 100%; height: 80px; background: #111; border: 1px solid #444; color: #ccc;
+    font-family: inherit; font-size: 10px; padding: 4px; resize: vertical;
+    outline: none; margin-top: 4px;
+}
+#gc-import-area:focus { border-color: #cccc44; }
+#gc-import-area::placeholder { color: #555; }
+
+/* hide Leaflet attribution noise */
+.leaflet-control-attribution { display: none; }
+
+/* ── Crosshair cursor ── */
+#map { cursor: none !important; }
+.leaflet-container { cursor: none !important; }
+.leaflet-grab, .leaflet-dragging { cursor: none !important; }
+.leaflet-marker-icon { cursor: none !important; }
+#crosshair {
+    position: fixed; pointer-events: none; z-index: 9999; display: none;
+}
+#crosshair .ch { position: absolute; background: #fff; }
+#crosshair .h { width: 21px; height: 2px; left: -10px; top: -1px; }
+#crosshair .v { width: 2px; height: 21px; left: -1px; top: -10px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="crosshair"><div class="ch h"></div><div class="ch v"></div></div>
+<div id="gatecode-popup">
+    <h3>SCRATCHPAD CONFIG — <span id="gc-airport"></span></h3>
+    <div style="color:#ff8c00;font-size:10px;margin-bottom:6px">Changes apply to all users viewing this airport.</div>
+    <table><thead><tr><th>FIX</th><th>CODE</th><th></th></tr></thead><tbody id="gc-body"></tbody></table>
+    <div style="margin-top:8px">
+        <button class="gc-btn" id="gc-add">+ ADD</button>
+        <button class="gc-btn" id="gc-save">SAVE</button>
+        <button class="gc-btn" id="gc-close">CLOSE</button>
+    </div>
+    <details style="margin-top:10px;border-top:1px solid #333;padding-top:8px">
+        <summary style="color:#888;cursor:pointer;font-size:10px">PASTE IMPORT</summary>
+        <textarea id="gc-import-area" rows="4" style="width:100%;background:#111;border:1px solid #444;color:#ccc;font-family:inherit;font-size:10px;margin-top:4px;padding:4px;resize:vertical" placeholder="Paste tab/comma-separated lines: PATTERN  CODE"></textarea>
+        <button class="gc-btn" id="gc-import-btn">IMPORT</button>
+    </details>
+</div>
+<div id="statusbar">
+    <a href="/asdex">◂ DIR</a>
+    <span class="airport-id" id="airport-id">—</span>
+    <span id="track-count">0 tracks</span>
+    <span id="conn">CONNECTING</span>
+    <span style="flex:1"></span>
+    <label>FONT</label>
+    <input type="number" id="font-size" min="8" max="20" value="13" step="1">
+    <label>ROT</label>
+    <input type="number" id="rot" min="0" max="360" value="360" step="1">
+    <button id="gc-toggle">SP CONFIG</button>
+    <button id="dn-toggle">NIGHT</button>
+    <button id="fs-toggle">FULL</button>
+</div>
+
+<script>
+// ── Crosshair cursor ────────────────────────────────────────────────────────
+const ch = document.getElementById('crosshair');
+document.addEventListener('mousemove', e => {
+    ch.style.left = e.clientX + 'px';
+    ch.style.top  = e.clientY + 'px';
+    ch.style.display = 'block';
+});
+document.addEventListener('mouseleave', () => { ch.style.display = 'none'; });
+
+// ── Map rotation ────────────────────────────────────────────────────────────
+let mapRotation = 0; // degrees, 360=north-up
+const rotInput = document.getElementById('rot');
+function applyRotation(deg) {
+    mapRotation = ((deg % 360) + 360) % 360;
+    // 360 = north-up (no rotation). Rotation = -(360 - value) = value - 360
+    const cssAngle = mapRotation === 360 ? 0 : -mapRotation;
+    document.getElementById('map').style.transform = `rotate(${cssAngle}deg)`;
+    // Counter-rotate data blocks so text stays upright
+    document.querySelectorAll('.db').forEach(el => {
+        el.style.transform = `rotate(${-cssAngle}deg)`;
+    });
+}
+rotInput.addEventListener('input', () => applyRotation(parseInt(rotInput.value) || 360));
+
+// ── Font size adjustment ───────────────────────────────────────────────────
+let dbFontSize = 13;
+const fontInput = document.getElementById('font-size');
+fontInput.addEventListener('input', () => {
+    dbFontSize = parseInt(fontInput.value) || 13;
+    // Invalidate all hashes so next batch re-creates icons with new font size
+    for (const tid of Object.keys(hashes)) hashes[tid] = '';
+});
+
+// ── Day/Night toggle ────────────────────────────────────────────────────────
+const dnBtn = document.getElementById('dn-toggle');
+dnBtn.addEventListener('click', () => {
+    isNightMode = !isNightMode;
+    asdexColors = isNightMode ? ASDEX_NIGHT : ASDEX_DAY;
+    dnBtn.textContent = isNightMode ? 'NIGHT' : 'DAY';
+    // Restyle surface polygons
+    const bg = asdexColors.bg;
+    document.getElementById('map').style.background = bg;
+    document.body.style.background = bg;
+    if (surfaceLayer) {
+        surfaceLayer.setStyle(feature => {
+            const sfc = (feature.properties && feature.properties.asdex) || 'structure';
+            return {
+                fillColor: asdexColors[sfc] || asdexColors.structure,
+                fillOpacity: 1,
+                color: asdexColors[sfc] || asdexColors.structure,
+                weight: 0.5, opacity: 1
+            };
+        });
+    }
+});
+
+// ── Fullscreen toggle ───────────────────────────────────────────────────────
+const fsBtn = document.getElementById('fs-toggle');
+fsBtn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+    } else {
+        document.exitFullscreen();
+    }
+});
+document.addEventListener('fullscreenchange', () => {
+    fsBtn.textContent = document.fullscreenElement ? 'EXIT' : 'FULL';
+});
+
+// ── Airport from URL ─────────────────────────────────────────────────────────
+const pathParts = window.location.pathname.split('/').filter(Boolean);
+const AIRPORT = (pathParts[pathParts.length - 1] || 'UNKN').toUpperCase();
+document.getElementById('airport-id').textContent = AIRPORT;
+document.title = 'ASDE-X ' + AIRPORT;
+
+// ── Leaflet map (right-click drag to pan) ───────────────────────────────────
+const map = L.map('map', {
+    center: [38.85, -77.04],
+    zoom: 14,
+    zoomControl: true,
+    zoomSnap: 0.25,
+    zoomDelta: 0.25,
+    attributionControl: false,
+    dragging: false,
+    doubleClickZoom: false
+});
+
+// Right-click drag panning
+(function() {
+    let panning = false, startX, startY;
+    const el = map.getContainer();
+    el.addEventListener('contextmenu', e => e.preventDefault());
+    el.addEventListener('mousedown', e => {
+        if (e.button !== 2) return;
+        panning = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!panning) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        startX = e.clientX; startY = e.clientY;
+        map.panBy([-dx, -dy], { animate: false });
+    });
+    document.addEventListener('mouseup', e => {
+        if (e.button === 2) panning = false;
+    });
+})();
+
+// ── ASDEX surface colors (vNAS spec) ────────────────────────────────────────
+const ASDEX_NIGHT = {
+    bg:        '#393939',
+    runway:    'rgb(0,0,0)',
+    taxiway:   'rgb(17,39,80)',
+    apron:     'rgb(18,55,97)',
+    structure: 'rgb(34,63,103)'
+};
+const ASDEX_DAY = {
+    bg:        '#005C73',
+    runway:    'rgb(0,0,0)',
+    taxiway:   'rgb(47,47,47)',
+    apron:     'rgb(73,73,73)',
+    structure: 'rgb(100,100,100)'
+};
+let asdexColors = ASDEX_NIGHT;
+let isNightMode = true;
+let surfaceLayer = null;
+
+// ── Load airport surface GeoJSON ────────────────────────────────────────────
+let surfaceLoaded = false;
+fetch(`/asdex/maps/${AIRPORT}.geojson`)
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(geojson => {
+        surfaceLayer = L.geoJSON(geojson, {
+            style: feature => {
+                const sfc = (feature.properties && feature.properties.asdex) || 'structure';
+                return {
+                    fillColor: asdexColors[sfc] || asdexColors.structure,
+                    fillOpacity: 1,
+                    color: asdexColors[sfc] || asdexColors.structure,
+                    weight: 0.5,
+                    opacity: 1
+                };
+            },
+            interactive: false
+        }).addTo(map);
+        map.fitBounds(surfaceLayer.getBounds(), { padding: [20, 20] });
+        surfaceLoaded = true;
+        centeredOnce = true;
+    })
+    .catch(() => {
+        // No surface map — fall back to CartoDB dark tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 20
+        }).addTo(map);
+    });
+
+// ── State ────────────────────────────────────────────────────────────────────
+const markers  = {};   // trackId → L.marker
+const hashes   = {};   // trackId → hash string for change detection
+let   trackCount = 0;
+let   centeredOnce = false;
+
+// ── Data block positions (8 compass points) ─────────────────────────────────
+const DB_ORDERS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const DB_POS = {
+    N:  { wl: -5,  wt: -43, lx: 9,   ly: -16 },
+    NE: { wl: 26,  wt: -24, lx: 26,  ly: -8 },
+    E:  { wl: 26,  wt: -7,  lx: 26,  ly: 9 },
+    SE: { wl: 26,  wt: 10,  lx: 26,  ly: 26 },
+    S:  { wl: -5,  wt: 33,  lx: 9,   ly: 30 },
+    SW: { wl: -83, wt: 10,  lx: -8,  ly: 26 },
+    W:  { wl: -83, wt: -7,  lx: -8,  ly: 9 },
+    NW: { wl: -83, wt: -24, lx: -8,  ly: -8 },
+};
+const dbPositions = {};  // trackId → 'N'|'NE'|..., default NE
+const hiddenDbs = new Set();  // trackIds with hidden data blocks
+
+// ── Data block drag (snap to 8 compass positions) ──────────────────────────
+let dragTid = null, dragOrigin = null;
+
+document.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const db = e.target.closest('.db');
+    if (!db) return;
+    const icon = e.target.closest('.ac-icon[data-tid]');
+    if (!icon) return;
+    dragTid = icon.dataset.tid;
+    const m = markers[dragTid];
+    if (!m) { dragTid = null; return; }
+    const el = m.getElement();
+    if (!el) { dragTid = null; return; }
+    const rect = el.getBoundingClientRect();
+    dragOrigin = { x: rect.left + 9, y: rect.top + 9 };
+    e.preventDefault();
+    e.stopPropagation();
+});
+
+document.addEventListener('mousemove', e => {
+    if (!dragTid) return;
+    const sdx = e.clientX - dragOrigin.x;
+    const sdy = e.clientY - dragOrigin.y;
+    // Convert screen delta to icon-local (undo CSS rotation)
+    const rad = mapRotation * Math.PI / 180;
+    const ldx = sdx * Math.cos(rad) + sdy * Math.sin(rad);
+    const ldy = -sdx * Math.sin(rad) + sdy * Math.cos(rad);
+    // Snap to nearest octant
+    let angle = Math.atan2(ldx, -ldy) * 180 / Math.PI;
+    if (angle < 0) angle += 360;
+    const idx = Math.round(angle / 45) % 8;
+    const dir = DB_ORDERS[idx];
+    if (dbPositions[dragTid] === dir) return;
+    dbPositions[dragTid] = dir;
+    // Update DOM live
+    const iconEl = document.querySelector(`.ac-icon[data-tid="${dragTid}"]`);
+    if (!iconEl) return;
+    const pos = DB_POS[dir];
+    const wrap = iconEl.querySelector('.db-wrap');
+    if (wrap) { wrap.style.left = pos.wl + 'px'; wrap.style.top = pos.wt + 'px'; }
+    const line = iconEl.querySelector('.ldr line');
+    if (line) { line.setAttribute('x2', pos.lx); line.setAttribute('y2', pos.ly); }
+});
+
+document.addEventListener('mouseup', () => { dragTid = null; dragOrigin = null; });
+
+// ── Touch support: tap symbol to toggle DB, drag DB to reposition ────────────
+let touchDragTid = null, touchOrigin = null, touchMoved = false;
+
+document.addEventListener('touchstart', e => {
+    const touch = e.touches[0];
+    // Drag: start on data block
+    const db = touch.target.closest('.db');
+    if (db) {
+        const icon = touch.target.closest('.ac-icon[data-tid]');
+        if (!icon) return;
+        touchDragTid = icon.dataset.tid;
+        const m = markers[touchDragTid];
+        if (!m) { touchDragTid = null; return; }
+        const el = m.getElement();
+        if (!el) { touchDragTid = null; return; }
+        const rect = el.getBoundingClientRect();
+        touchOrigin = { x: rect.left + 9, y: rect.top + 9 };
+        touchMoved = false;
+        e.preventDefault();
+        return;
+    }
+    // Tap: on target symbol — track for toggle on touchend
+    const sym = touch.target.closest('svg.sym');
+    if (sym) { touchMoved = false; }
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+    touchMoved = true;
+    if (!touchDragTid) return;
+    const touch = e.touches[0];
+    const sdx = touch.clientX - touchOrigin.x;
+    const sdy = touch.clientY - touchOrigin.y;
+    const rad = mapRotation * Math.PI / 180;
+    const ldx = sdx * Math.cos(rad) + sdy * Math.sin(rad);
+    const ldy = -sdx * Math.sin(rad) + sdy * Math.cos(rad);
+    let angle = Math.atan2(ldx, -ldy) * 180 / Math.PI;
+    if (angle < 0) angle += 360;
+    const idx = Math.round(angle / 45) % 8;
+    const dir = DB_ORDERS[idx];
+    if (dbPositions[touchDragTid] === dir) return;
+    dbPositions[touchDragTid] = dir;
+    const iconEl = document.querySelector(`.ac-icon[data-tid="${touchDragTid}"]`);
+    if (!iconEl) return;
+    const pos = DB_POS[dir];
+    const wrap = iconEl.querySelector('.db-wrap');
+    if (wrap) { wrap.style.left = pos.wl + 'px'; wrap.style.top = pos.wt + 'px'; }
+    const line = iconEl.querySelector('.ldr line');
+    if (line) { line.setAttribute('x2', pos.lx); line.setAttribute('y2', pos.ly); }
+    e.preventDefault();
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+    if (touchDragTid) { touchDragTid = null; touchOrigin = null; return; }
+    // Tap on symbol (no drag) → toggle data block
+    if (touchMoved) return;
+    const touch = e.changedTouches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (!el) return;
+    const sym = el.closest('svg.sym');
+    if (!sym) return;
+    const icon = sym.closest('.ac-icon[data-tid]');
+    if (!icon) return;
+    const tid = icon.dataset.tid;
+    if (hiddenDbs.has(tid)) hiddenDbs.delete(tid);
+    else hiddenDbs.add(tid);
+    const hidden = hiddenDbs.has(tid);
+    const wrap = icon.querySelector('.db-wrap');
+    const ldr = icon.querySelector('.ldr');
+    if (wrap) wrap.style.display = hidden ? 'none' : '';
+    if (ldr) ldr.style.display = hidden ? 'none' : '';
+    e.preventDefault();
+});
+
+// ── Left-click target to toggle data block ──────────────────────────────────
+document.addEventListener('click', e => {
+    const sym = e.target.closest('svg.sym');
+    if (!sym) return;
+    const icon = sym.closest('.ac-icon[data-tid]');
+    if (!icon) return;
+    const tid = icon.dataset.tid;
+    if (hiddenDbs.has(tid)) hiddenDbs.delete(tid);
+    else hiddenDbs.add(tid);
+    const hidden = hiddenDbs.has(tid);
+    const wrap = icon.querySelector('.db-wrap');
+    const ldr = icon.querySelector('.ldr');
+    if (wrap) wrap.style.display = hidden ? 'none' : '';
+    if (ldr) ldr.style.display = hidden ? 'none' : '';
+});
+
+const connEl  = document.getElementById('conn');
+const cntEl   = document.getElementById('track-count');
+
+// ── Gate code configuration popup ───────────────────────────────────────────
+const gcPopup = document.getElementById('gatecode-popup');
+const gcBody = document.getElementById('gc-body');
+const gcAirportEl = document.getElementById('gc-airport');
+
+function gcAddRow(fix = '', code = '') {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input class="gc-fix" value="${fix}" placeholder="FIX"></td>` +
+        `<td><input class="gc-code" value="${code}" placeholder="CODE"></td>` +
+        `<td><span class="gc-del">\u2715</span></td>`;
+    tr.querySelector('.gc-del').onclick = () => tr.remove();
+    gcBody.appendChild(tr);
+    return tr;
+}
+
+async function gcOpen() {
+    gcAirportEl.textContent = AIRPORT;
+    gcBody.innerHTML = '';
+    try {
+        const resp = await fetch(`/api/asdex/${AIRPORT}/gatecodes`);
+        const data = await resp.json();
+        // Group by code for display: group fixes sharing the same code
+        for (const [fix, code] of Object.entries(data)) gcAddRow(fix, code);
+    } catch {}
+    if (!gcBody.children.length) gcAddRow();
+    gcPopup.style.display = 'block';
+}
+
+async function gcSave() {
+    const entries = {};
+    for (const tr of gcBody.querySelectorAll('tr')) {
+        const fix = tr.querySelector('.gc-fix').value.trim().toUpperCase();
+        const code = tr.querySelector('.gc-code').value.trim().toUpperCase();
+        if (fix && code) entries[fix] = code;
+    }
+    await fetch(`/api/asdex/${AIRPORT}/gatecodes`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entries)
+    });
+    gcPopup.style.display = 'none';
+    // Force hash invalidation so all icons rebuild with new gate codes
+    for (const tid of Object.keys(hashes)) hashes[tid] = '';
+}
+
+document.getElementById('gc-toggle').onclick = () => {
+    if (gcPopup.style.display === 'block') gcPopup.style.display = 'none';
+    else gcOpen();
+};
+document.getElementById('gc-add').onclick = () => { const tr = gcAddRow(); tr.querySelector('.gc-fix').focus(); };
+document.getElementById('gc-save').onclick = gcSave;
+document.getElementById('gc-close').onclick = () => { gcPopup.style.display = 'none'; };
+document.getElementById('gc-import-btn').onclick = () => {
+    const raw = document.getElementById('gc-import-area').value.trim();
+    if (!raw) return;
+    let count = 0;
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Try tab-separated, then comma, then 2+ spaces, then last whitespace token
+        let parts = trimmed.split('\t').map(s => s.trim()).filter(Boolean);
+        if (parts.length < 2) parts = trimmed.split(',').map(s => s.trim()).filter(Boolean);
+        if (parts.length < 2) parts = trimmed.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
+        if (parts.length < 2) {
+            // Last token is code, everything before is pattern
+            const m = trimmed.match(/^(.+)\s+(\S+)$/);
+            if (m) parts = [m[1].trim(), m[2].trim()];
+        }
+        if (parts.length >= 2) {
+            const pattern = parts.slice(0, parts.length - 1).join(' ').toUpperCase();
+            const code = parts[parts.length - 1].toUpperCase();
+            if (pattern && code) { gcAddRow(pattern, code); count++; }
+        }
+    }
+    document.getElementById('gc-import-area').value = '';
+    if (count) document.querySelector('details').removeAttribute('open');
+};
+
+// ── Wake turbulence detection (FAA 7360.1D type→weight class) ────────────────
+// Loaded from wake-categories.json: { "A320": "L", "B738": "L", "C172": "S", "C17": "H", ... }
+// Weight classes: J=Super, H=Heavy, L=Large, S=Small, S+=Small 12.5-41K lbs
+let WAKE_MAP = {};  // populated async on load
+fetch('/wake-categories.json').then(r => r.json()).then(data => {
+    WAKE_MAP = data;
+    // Invalidate all hashes so icons rebuild with correct wake colors
+    for (const tid of Object.keys(hashes)) hashes[tid] = '';
+}).catch(() => {});
+
+function targetCategory(t) {
+    // unknown = no callsign/squawk, OR tgtType explicitly unknown
+    if (t.tgtType === 'unknown') return 'unknown';
+    if (t.tgtType === 'vehicle') return 'vehicle';
+    if (!t.callsign && !t.squawk) return 'unknown';
+    // RECAT wake category A-E from SMES = heavy (orange)
+    if (t.wake && 'ABCDE'.includes(t.wake.toUpperCase())) return 'heavy';
+    if (t.acType) {
+        const wt = WAKE_MAP[t.acType.toUpperCase()];
+        if (wt === 'J' || wt === 'H') return 'heavy';
+    }
+    return 'aircraft';
+}
+
+// ── SVG path for airplane (pointing up = heading 0°) ─────────────────────────
+// Fuselage + swept wings + V-tail. ViewBox centered on 0,0, nose at top.
+const PLANE_PATH = 'M 0 -8 L 1.3 -5 L 1.3 -1 L 8 2 L 7.5 3 L 1.8 1.5 L 1.8 5 L 4 7 L 0 6 L -4 7 L -1.8 5 L -1.8 1.5 L -7.5 3 L -8 2 L -1.3 -1 L -1.3 -5 Z';
+// Kite shape (unknown): pointy bottom, wide top — smaller than aircraft
+const DIAMOND_PATH = 'M 0 3.5 L 2.5 0.5 L 0 -4.5 L -2.5 0.5 Z';
+// Vehicle: small square
+const VEHICLE_PATH = 'M -4 -4 L 4 -4 L 4 4 L -4 4 Z';
+
+function makeIcon(t) {
+    const cat = targetCategory(t);
+    const hdg = t.hdg ?? 0;
+
+    let fill, symHtml;
+    if (cat === 'unknown') {
+        fill = '#00ffff';
+        symHtml = `<path d="${DIAMOND_PATH}" fill="${fill}" fill-opacity="0.9"/>`;
+    } else if (cat === 'vehicle') {
+        fill = '#00cccc';
+        symHtml = `<path d="${VEHICLE_PATH}" fill="${fill}" fill-opacity="0.75"/>`;
+    } else {
+        fill = cat === 'heavy' ? '#ff8c00' : '#ffffff';
+        // rotate inline via SVG transform (faster than CSS for many markers)
+        symHtml = `<g transform="rotate(${hdg})">${'<path d="' + PLANE_PATH + '" fill="' + fill + '" fill-opacity="0.95"/>'}</g>`;
+    }
+
+    // Data block — skip for targets with no callsign and no squawk
+    const cs  = t.callsign || t.squawk || '';
+    const alt = t.altFt != null ? Math.round(t.altFt / 100).toString().padStart(3, '0') : '';
+    const spd = t.spdKts != null ? Math.round(t.spdKts / 10).toString().padStart(2, '0') : '';
+    const typ = t.acType || '';
+
+    // Enrichment: gate code (from fix→code mapping or destination fallback)
+    const gateCode = t.gateCode || '';
+
+    let dbHtml = '';
+    const dbStyle = `font-size:${dbFontSize}px;line-height:${Math.round(dbFontSize * 1.25)}px`;
+    if (cs && cat !== 'unknown') {
+        if (cat !== 'vehicle') {
+            const gcSpan = gateCode ? `<span class="db-extra">${gateCode}</span>` : '';
+            // Line 2: {acType} {gateCode} {speed}
+            const parts2 = [typ, gcSpan, spd].filter(Boolean).join(' ');
+            dbHtml = `<div class="db" style="${dbStyle}">
+                <div class="db-line1">${cs}${alt ? ' ' + alt : ''}</div>
+                <div class="db-line2">${parts2}</div>
+            </div>`;
+        } else {
+            dbHtml = `<div class="db" style="${dbStyle}"><div class="db-line1">${cs}</div></div>`;
+        }
+    }
+
+    const posKey = dbPositions[t.trackId] || 'NE';
+    const pos = DB_POS[posKey];
+    const hideStyle = hiddenDbs.has(t.trackId) ? ';display:none' : '';
+    const showLdr = cs && cat !== 'unknown';
+    const ldrHtml = showLdr ? `<svg class="ldr" width="18" height="18" viewBox="0 0 18 18" style="position:absolute;left:0;top:0;overflow:visible${hideStyle}">
+            <line x1="9" y1="9" x2="${pos.lx}" y2="${pos.ly}" stroke="#00cc00" stroke-width="0.5" opacity="0.6"/>
+        </svg>` : '';
+
+    const html = `<div class="ac-icon" data-tid="${t.trackId}">
+        <svg class="sym" width="18" height="18" viewBox="-9 -9 18 18" style="display:block"><circle cx="0" cy="0" r="14" fill="transparent"/>${symHtml}<circle class="halo" cx="0" cy="0" r="11" fill="none" stroke="#fff" stroke-width="1"/></svg>
+        ${ldrHtml}
+        <div class="db-wrap" style="left:${pos.wl}px;top:${pos.wt}px${hideStyle}">${dbHtml}</div>
+    </div>`;
+
+    return L.divIcon({ className: '', html, iconSize: [200, 18], iconAnchor: [9, 9] });
+}
+
+function trackHash(t) {
+    return `${t.lat?.toFixed(5)},${t.lon?.toFixed(5)},${t.callsign||''},${t.altFt||0},${t.spdKts||0},${t.hdg?.toFixed(0)||0},${t.tgtType||''},${t.acType||''},${t.wake||''},${t.gateCode||''}`;
+}
+
+// ── Apply one track update ───────────────────────────────────────────────────
+function applyTrack(t) {
+    if (t.lat == null || t.lon == null) return;
+    const ll  = [t.lat, t.lon];
+    const h   = trackHash(t);
+    const tid = t.trackId;
+
+    if (!markers[tid]) {
+        markers[tid] = L.marker(ll, { icon: makeIcon(t), zIndexOffset: 0 }).addTo(map);
+    } else {
+        markers[tid].setLatLng(ll);
+        if (hashes[tid] !== h) {
+            markers[tid].setIcon(makeIcon(t));
+        }
+    }
+    hashes[tid] = h;
+}
+
+function removeTrack(trackId) {
+    if (markers[trackId]) { map.removeLayer(markers[trackId]); delete markers[trackId]; }
+    delete hashes[trackId];
+}
+
+function updateCount() {
+    trackCount = Object.keys(markers).length;
+    cntEl.textContent = trackCount + ' track' + (trackCount !== 1 ? 's' : '');
+}
+
+// ── Center map on track centroid ─────────────────────────────────────────────
+function centerOnTracks(tracks) {
+    if (!tracks.length || centeredOnce) return;
+    const lat = tracks.reduce((s, t) => s + t.lat, 0) / tracks.length;
+    const lon = tracks.reduce((s, t) => s + t.lon, 0) / tracks.length;
+    map.setView([lat, lon], 14);
+    centeredOnce = true;
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+let ws = null;
+let wsRetryTimer = null;
+
+function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url   = `${proto}//${location.host}/asdex/ws/${AIRPORT}`;
+    ws = new WebSocket(url);
+    connEl.textContent = 'CONNECTING';
+    connEl.className   = 'waiting';
+
+    ws.onopen = () => {
+        connEl.textContent = 'LIVE';
+        connEl.className   = 'ok';
+        if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; }
+    };
+
+    ws.onmessage = ev => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+
+        if (msg.type === 'snapshot') {
+            // Remove stale markers not in snapshot
+            const incoming = new Set((msg.data.tracks || []).map(t => t.trackId));
+            for (const tid of Object.keys(markers)) {
+                if (!incoming.has(tid)) removeTrack(tid);
+            }
+            for (const t of (msg.data.tracks || [])) applyTrack(t);
+            centerOnTracks(msg.data.tracks || []);
+            updateCount();
+
+        } else if (msg.type === 'batch') {
+            for (const t of (msg.data || [])) applyTrack(t);
+            updateCount();
+
+        } else if (msg.type === 'remove') {
+            removeTrack(msg.data.trackId);
+            updateCount();
+        }
+    };
+
+    ws.onclose = () => {
+        connEl.textContent = 'DISCONNECTED';
+        connEl.className   = '';
+        if (!window.idlePaused || !window.idlePaused()) wsRetryTimer = setTimeout(connect, 5000);
+    };
+
+    ws.onerror = () => { ws.close(); };
+}
+
+window.idleOnPause = () => { if (ws) { ws.onclose = null; ws.close(); ws = null; } if (wsRetryTimer) { clearTimeout(wsRetryTimer); wsRetryTimer = null; } };
+window.idleOnResume = () => { connect(); };
+
+connect();
+</script>
+<script src="/idle-timer.js"></script>
+</body>
+</html>
